@@ -1,0 +1,49 @@
+# Node.js artifacts
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn.lock
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Development and IDE files
+.git/
+.gitignore
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+.cursorindexingignore
+
+# Documentation and metadata
+README.md
+LICENSE
+*.md
+.specstory/
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Environment and configuration
+.env
+.env.*
+setup_instructions.txt
+
+# Test files
+test/
+tests/
+*.test.ts
+*.spec.ts
+coverage/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+

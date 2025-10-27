@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  mcp-csv-analysis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-csv-analysis-server
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      # Server configuration
+      - PORT=${PORT:-3000}
+      # Required: Set GEMINI_API_KEY in your .env file or environment
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Production mode
+      - NODE_ENV=production
+    # Uncomment the volumes section below for development with hot-reloading
+    # volumes:
+    #   - ./src:/app/src
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Note: Create a .env file in the same directory with the following content:
+# GEMINI_API_KEY=your_gemini_api_key_here
+# PORT=3000  (optional, defaults to 3000)
+

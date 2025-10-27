@@ -1,11 +1,12 @@
 # MCP CSV Analysis with Gemini AI
 
-A powerful Model Context Protocol (MCP) server that provides advanced CSV analysis and thinking generation capabilities using Google's Gemini AI. This tool integrates seamlessly with Claude Desktop and offers sophisticated data analysis, visualization, and natural language processing features.
+A powerful Model Context Protocol (MCP) server that provides advanced CSV analysis and thinking generation capabilities using Google's Gemini AI. This tool integrates seamlessly with Claude Desktop and offers sophisticated data analysis, visualization, and natural language processing features. Supports both local CSV files and remote files accessible via HTTP/HTTPS URLs, enabling seamless analysis of data from web sources.
 
 ## 🌟 Features
 
 ### 1. CSV Analysis Tool (`analyze-csv`)
 - **Comprehensive Data Analysis**: Performs detailed Exploratory Data Analysis (EDA) on CSV files
+- **Flexible File Sources**: Analyze CSV files from local file system or remote URLs (HTTP/HTTPS)
 - **Two Analysis Modes**:
   - `basic`: Quick overview and essential statistics
   - `detailed`: In-depth analysis with advanced insights
@@ -21,6 +22,7 @@ A powerful Model Context Protocol (MCP) server that provides advanced CSV analys
 
 ### 2. Data Visualization Tool (`visualize-data`)
 - **Interactive Visualizations**: Creates beautiful and informative charts using Plotly
+- **Flexible File Sources**: Visualize CSV data from local file system or remote URLs (HTTP/HTTPS)
 - **Visualization Types**:
   - `basic`: Automatic visualization selection based on data types
   - `advanced`: Complex multi-variable visualizations
@@ -109,6 +111,20 @@ npm run build
 }
 ```
 
+#### Using Remote CSV Files
+```json
+{
+  "name": "analyze-csv",
+  "arguments": {
+    "csvPath": "https://example.com/data/sales_data.csv",
+    "analysisType": "detailed",
+    "outputDir": "./custom_output"
+  }
+}
+```
+
+The `csvPath` parameter accepts both local file paths and HTTP/HTTPS URLs. When using URLs, ensure the CSV file is publicly accessible or properly authenticated.
+
 ### Data Visualization
 ```json
 {
@@ -118,6 +134,20 @@ npm run build
     "visualizationType": "basic",
     "columns": ["column1", "column2"],
     "chartTypes": ["histogram", "scatter"],
+    "outputDir": "./custom_output"
+  }
+}
+```
+
+#### Using Remote CSV Files
+```json
+{
+  "name": "visualize-data",
+  "arguments": {
+    "csvPath": "https://example.com/data/metrics.csv",
+    "visualizationType": "basic",
+    "columns": ["date", "revenue"],
+    "chartTypes": ["line", "bar"],
     "outputDir": "./custom_output"
   }
 }
@@ -170,6 +200,40 @@ output/
 - Custom styling options
 - Advanced plot layouts
 
+## 🌐 Remote File Support
+
+### Network Requirements
+- Active internet connection for accessing remote CSV files
+- Firewall/proxy configurations must allow outbound HTTPS connections
+- DNS resolution for remote hostnames
+- No special network configuration needed for local files
+
+### URL Support Details
+- **Supported Protocols**: HTTP and HTTPS
+- **Authentication**: Currently supports publicly accessible URLs only
+- **File Types**: Remote files must be valid CSV format
+- **Redirects**: Follows standard HTTP redirects automatically
+
+### Performance Considerations
+- **Download Time**: Large remote files may take longer to download before analysis begins
+- **Network Latency**: Analysis start time depends on network speed and file size
+- **Bandwidth**: Consider bandwidth usage for large CSV files
+- **Timeouts**: Very large files or slow connections may timeout (default Node.js fetch timeout applies)
+
+### Best Practices
+- Use HTTPS URLs for secure data transmission
+- Verify URL accessibility before running analysis
+- For frequently analyzed files, consider caching locally
+- Monitor network usage when processing large remote datasets
+- Test with smaller files first to verify URL accessibility
+
+### Limitations
+- **File Size**: Remote files are loaded into memory; extremely large files (>1GB) may cause memory issues
+- **Authentication**: Password-protected or authentication-required URLs are not currently supported
+- **Network Errors**: Connection failures, timeouts, or DNS errors will cause the analysis to fail
+- **CORS**: Not applicable as this is a server-side tool, not browser-based
+- **Rate Limiting**: Some data sources may have rate limits on file downloads
+
 ## 🛠️ Development
 
 ### Available Scripts
@@ -208,6 +272,7 @@ output/
 ## ⚠️ Limitations
 
 - Maximum file size: Dependent on system memory
+- Network limitations: See "Remote File Support" section for URL-specific constraints
 - Rate limits: Based on Gemini API and Plotly quotas
 - Output token limit: 65,536 tokens per response
 - CSV format: Standard CSV files only
@@ -235,7 +300,14 @@ output/
    - Check file permissions
    - Ensure file is not empty
 
-3. **Claude Desktop Connection**
+3. **URL Fetch Error**
+   - Verify URL is accessible and publicly available
+   - Check internet connection
+   - Ensure URL returns valid CSV content
+   - Verify firewall/proxy settings allow outbound connections
+   - Check for HTTP error responses (404, 403, 500, etc.)
+
+4. **Claude Desktop Connection**
    - Verify config.json syntax
    - Check file paths in config
    - Restart Claude Desktop
@@ -252,7 +324,7 @@ DEBUG=true
 ### CSV Analysis Tool
 ```typescript
 interface AnalyzeCSVParams {
-  csvPath: string;          // Path to CSV file
+  csvPath: string;          // Local file path or HTTP/HTTPS URL to CSV file
   outputDir?: string;       // Optional output directory
   analysisType?: 'basic' | 'detailed';  // Analysis type
 }
@@ -261,7 +333,7 @@ interface AnalyzeCSVParams {
 ### Data Visualization Tool
 ```typescript
 interface VisualizeDataParams {
-  csvPath: string;          // Path to CSV file
+  csvPath: string;          // Local file path or HTTP/HTTPS URL to CSV file
   outputDir?: string;       // Optional output directory
   visualizationType?: 'basic' | 'advanced' | 'custom';  // Visualization type
   columns?: string[];       // Columns to visualize

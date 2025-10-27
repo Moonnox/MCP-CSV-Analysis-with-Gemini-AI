@@ -1,9 +1,10 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import dotenv from 'dotenv';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  isInitializeRequest,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from 'zod';
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -12,8 +13,12 @@ import mime from "mime-types";
 import path from "path";
 import csv from 'csv-parser';
 import { createReadStream } from 'fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { Chart as ChartJS, ChartConfiguration } from 'chart.js/auto';
 import * as d3 from 'd3';
+import express from 'express';
+import { randomUUID } from 'node:crypto';
 
 // Load environment variables
 dotenv.config();
@@ -72,14 +77,14 @@ const GenerateThinkingSchema = z.object({
 
 // Schema for CSV analysis tool
 const AnalyzeCSVSchema = z.object({
-  csvPath: z.string().describe('Path to the CSV file to analyze'),
+  csvPath: z.string().describe('Local file path or HTTP/HTTPS URL to the CSV file to analyze'),
   outputDir: z.string().optional().describe('Directory to save analysis results'),
   analysisType: z.enum(['basic', 'detailed']).optional().default('detailed').describe('Type of analysis to perform'),
 });
 
 // Schema for visualization tool
 const VisualizeDataSchema = z.object({
-  csvPath: z.string().describe('Path to the CSV file to visualize'),
+  csvPath: z.string().describe('Local file path or HTTP/HTTPS URL to the CSV file to visualize'),
   outputDir: z.string().optional().describe('Directory to save visualization results'),
   visualizationType: z.enum(['bar', 'line', 'scatter', 'pie']).default('bar').describe('Type of visualization to generate'),
   columns: z.array(z.string()).optional().describe('Specific columns to visualize'),
@@ -88,14 +93,85 @@ const VisualizeDataSchema = z.object({
 
 // Function to read CSV file and return data
 async function readCSVFile(filePath: string): Promise<Record<string, string>[]> {
-  return new Promise((resolve, reject) => {
-    const results: Record<string, string>[] = [];
-    createReadStream(filePath)
-      .pipe(csv())
-      .on('data', (data: Record<string, string>) => results.push(data))
-      .on('end', () => resolve(results))
-      .on('error', (error: Error) => reject(error));
-  });
+  // Detect if input is a URL or local file path
+  const isURL = filePath.startsWith('http://') || filePath.startsWith('https://');
+  
+  const results: Record<string, string>[] = [];
+  
+  if (isURL) {
+    // Comment 2: Validate URL format before fetch to fail fast on invalid URLs
+    try {
+      new URL(filePath);
+    } catch (urlError: any) {
+      throw new Error(`Invalid URL: ${filePath}`);
+    }
+    
+    // Comment 5: Add fetch timeout to avoid indefinite hangs on slow/unresponsive endpoints
+    const controller = new AbortController();
+    const timeoutMs = 30000; // 30 seconds
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    
+    try {
+      // Fetch with timeout signal
+      const response = await fetch(filePath, { signal: controller.signal });
+      
+      // Clear the timeout once response is received
+      clearTimeout(timeoutId);
+      
+      // Check if response is successful (status 200-299)
+      if (!response.ok) {
+        throw new Error(`Failed to fetch CSV from URL: ${filePath} - HTTP ${response.status} ${response.statusText}`);
+      }
+      
+      // Validate that response body exists
+      if (!response.body) {
+        throw new Error(`Failed to fetch CSV from URL: ${filePath} - Response body is null`);
+      }
+      
+      // Convert Web ReadableStream to Node.js Readable stream
+      const sourceStream = Readable.fromWeb(response.body as any);
+      
+      // Create CSV parser
+      const parser = csv();
+      
+      // Comment 3: Use async/await with pipeline instead of async executor in Promise
+      // Comment 1: Use pipeline() from node:stream/promises to capture all errors
+      // Comment 4: pipeline() handles cleanup/abort on errors automatically
+      parser.on('data', (data: Record<string, string>) => results.push(data));
+      
+      await pipeline(sourceStream, parser);
+      
+      return results;
+      
+    } catch (fetchError: any) {
+      // Clear timeout in error case
+      clearTimeout(timeoutId);
+      
+      // Handle abort/timeout errors with clear message
+      if (fetchError.name === 'AbortError') {
+        throw new Error(`Failed to fetch CSV from URL: ${filePath} - Timeout exceeded (${timeoutMs}ms)`);
+      }
+      
+      // Handle network errors (connection failures, DNS errors, etc.)
+      throw new Error(`Failed to fetch CSV from URL: ${filePath} - ${fetchError.message}`);
+    }
+  } else {
+    // Handle local file path case
+    const sourceStream = createReadStream(filePath);
+    const parser = csv();
+    
+    // Comment 3: Use async/await with pipeline instead of async executor in Promise
+    // Comment 1: Use pipeline() from node:stream/promises to capture all errors
+    // Comment 4: pipeline() handles cleanup/abort on errors automatically
+    parser.on('data', (data: Record<string, string>) => results.push(data));
+    
+    try {
+      await pipeline(sourceStream, parser);
+      return results;
+    } catch (error: any) {
+      throw new Error(`Error reading local CSV file: ${filePath} - ${error.message}`);
+    }
+  }
 }
 
 // Function to generate EDA prompts based on CSV data
@@ -224,13 +300,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze-csv",
-        description: "Analyze CSV file using Gemini's AI capabilities for EDA and data science insights",
+        description: "Analyze CSV file (local or remote URL) using Gemini's AI capabilities for EDA and data science insights",
         inputSchema: {
           type: "object",
           properties: {
             csvPath: {
               type: "string",
-              description: "Path to the CSV file to analyze",
+              description: "Local file path or HTTP/HTTPS URL to the CSV file to analyze",
             },
             outputDir: {
               type: "string",
@@ -248,13 +324,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "visualize-data",
-        description: "Generate visualizations from CSV data using Chart.js",
+        description: "Generate visualizations from CSV data (local or remote URL) using Chart.js",
         inputSchema: {
           type: "object",
           properties: {
             csvPath: {
               type: "string",
-              description: "Path to the CSV file to visualize"
+              description: "Local file path or HTTP/HTTPS URL to the CSV file to visualize"
             },
             outputDir: {
               type: "string",
@@ -473,13 +549,108 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// Session management for HTTP transport
+const transports = new Map<string, StreamableHTTPServerTransport>();
+
 // Start the server
 async function main() {
   try {
-    // Start MCP server
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-    console.error("Google Thinking Generator MCP Server running on stdio");
+    // Create Express application
+    const app = express();
+    app.use(express.json());
+    
+    // Read port from environment variable, default to 3000
+    const portEnv = process.env.PORT;
+    const parsedPort = portEnv ? parseInt(portEnv, 10) : 3000;
+    const port = Number.isNaN(parsedPort) ? 3000 : parsedPort;
+
+    // Health check endpoint
+    app.get('/health', (req: express.Request, res: express.Response) => {
+      res.status(200).json({
+        status: 'healthy',
+        service: 'mcp-csv-analysis-gemini',
+        version: '1.0.0'
+      });
+    });
+
+    // MCP POST endpoint
+    app.post('/mcp', async (req: express.Request, res: express.Response) => {
+      const sessionId = req.get('mcp-session-id');
+      let transport = sessionId ? transports.get(sessionId) : undefined;
+
+      if (!transport) {
+        // Check if this is an initialize request
+        if (isInitializeRequest(req.body)) {
+          // Declare local variable to hold the initialized session ID
+          let localSessionId: string | undefined;
+          
+          // Create new transport with session management
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (sessionId: string) => {
+              localSessionId = sessionId;
+              transports.set(sessionId, transport!);
+            }
+          });
+          
+          // Set up cleanup on transport close using captured session ID
+          transport.onclose = () => {
+            if (localSessionId) {
+              transports.delete(localSessionId);
+            }
+          };
+          
+          // Connect server to the new transport
+          await server.connect(transport);
+        } else {
+          // Invalid or missing session
+          return res.status(404).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message: 'Invalid or missing Mcp-Session-Id'
+            },
+            id: null
+          });
+        }
+      }
+
+      // Handle the MCP request
+      await transport.handleRequest(req, res, req.body);
+    });
+
+    // Shared handler for GET and DELETE requests
+    const handleSession = async (req: express.Request, res: express.Response) => {
+      const sessionId = req.get('mcp-session-id');
+      const transport = sessionId ? transports.get(sessionId) : undefined;
+
+      if (!transport) {
+        return res.status(404).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Unknown Mcp-Session-Id'
+          },
+          id: null
+        });
+      }
+
+      await transport.handleRequest(req, res);
+    };
+
+    // MCP GET endpoint (for SSE streaming)
+    app.get('/mcp', handleSession);
+
+    // MCP DELETE endpoint (for session cleanup)
+    app.delete('/mcp', handleSession);
+
+    // Start HTTP server
+    const httpServer = app.listen(port, () => {
+      const actualPort = port === 0 ? (httpServer.address() as any)?.port : port;
+      console.error(`MCP CSV Analysis Server running on http://localhost:${actualPort}`);
+      console.error(`MCP endpoint: http://localhost:${actualPort}/mcp`);
+      console.error(`Health check: http://localhost:${actualPort}/health`);
+    });
   } catch (error) {
     console.error("Fatal error in main():", error);
     process.exit(1);
