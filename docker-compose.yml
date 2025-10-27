@@ -7,10 +7,8 @@ services:
       dockerfile: Dockerfile
     container_name: mcp-csv-analysis-server
     ports:
-      - "${PORT:-3000}:3000"
+      - "3000:3000"
     environment:
-      # Server configuration
-      - PORT=${PORT:-3000}
       # Required: Set GEMINI_API_KEY in your .env file or environment
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       # Production mode

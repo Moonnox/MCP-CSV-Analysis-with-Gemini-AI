@@ -5,10 +5,10 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Copy package files
-COPY package.json package-lock.json* ./
+COPY package*.json ./
 
 # Install all dependencies (including devDependencies for building)
-RUN npm ci --prefer-offline --no-audit
+RUN if [ -f package-lock.json ]; then npm ci --prefer-offline --no-audit; else npm install --prefer-offline --no-audit; fi
 
 # Copy TypeScript configuration and source code
 COPY tsconfig.json ./
@@ -28,10 +28,10 @@ LABEL description="MCP Server for CSV Analysis with Gemini AI"
 WORKDIR /app
 
 # Copy package files
-COPY package.json package-lock.json* ./
+COPY package*.json ./
 
 # Install only production dependencies
-RUN npm ci --only=production --prefer-offline --no-audit
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev --prefer-offline --no-audit; else npm install --omit=dev --prefer-offline --no-audit; fi
 
 # Copy compiled code from builder stage
 COPY --from=builder /app/dist ./dist
