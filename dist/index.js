@@ -280,13 +280,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             {
                 name: "visualize-data",
-                description: "Generate visualizations from CSV data (local or remote URL) using Chart.js",
+                description: "Generate visualizations from CSV data (local or remote URL) using Chart.js. IMPORTANT: Your CSV file MUST have at least 2 columns. The first column will be used for chart labels (x-axis), and the second column will be used for values (y-axis).",
                 inputSchema: {
                     type: "object",
                     properties: {
                         csvPath: {
                             type: "string",
-                            description: "Local file path or HTTP/HTTPS URL to the CSV file to visualize"
+                            description: "Local file path or HTTP/HTTPS URL to the CSV file to visualize. The CSV MUST contain at least 2 columns."
                         },
                         outputDir: {
                             type: "string",
@@ -303,11 +303,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             items: {
                                 type: "string"
                             },
-                            description: "Columns to visualize (first column for labels, second for values)"
+                            description: "Array of exactly 2 or more column names from your CSV to visualize. First column = labels (x-axis), second column = values (y-axis). If not specified, the first 2 columns from the CSV will be used automatically. REQUIRED: Must specify at least 2 column names if using this parameter.",
+                            minItems: 2
                         },
                         title: {
                             type: "string",
-                            description: "Chart title (optional)"
+                            description: "Chart title (optional). If not provided, will default to '[Column2] by [Column1]'"
                         }
                     },
                     required: ["csvPath"]
@@ -439,7 +440,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 const availableColumns = Object.keys(csvData[0]);
                 const columnsToVisualize = columns || availableColumns.slice(0, 2);
                 if (columnsToVisualize.length < 2) {
-                    throw new Error('At least two columns are required for visualization');
+                    throw new Error(`At least 2 columns are required for visualization. ` +
+                        `Available columns in CSV: [${availableColumns.join(', ')}]. ` +
+                        `Please ensure your CSV has at least 2 columns, or specify at least 2 column names using the 'columns' parameter.`);
                 }
                 // Generate visualizations
                 const visualizationFiles = await createVisualization(csvData, columnsToVisualize, visualizationType, title || '', saveDir);
