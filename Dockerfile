@@ -27,6 +27,19 @@ LABEL description="MCP Server for CSV Analysis with Gemini AI"
 # Set working directory
 WORKDIR /app
 
+# Install Python and dependencies for chart rendering
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    py3-setuptools \
+    py3-wheel \
+    gcc \
+    musl-dev \
+    python3-dev \
+    libffi-dev \
+    openssl-dev \
+    wget
+
 # Copy package files
 COPY package*.json ./
 
@@ -36,8 +49,18 @@ RUN if [ -f package-lock.json ]; then npm ci --omit=dev --prefer-offline --no-au
 # Copy compiled code from builder stage
 COPY --from=builder /app/dist ./dist
 
+# Copy Python scripts and requirements
+COPY scripts/ ./scripts/
+COPY requirements.txt ./
+
+# Install Python dependencies
+RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
+
 # Set production environment
 ENV NODE_ENV=production
+
+# Create output directory
+RUN mkdir -p /app/output && chmod 755 /app/output
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
@@ -49,11 +72,6 @@ USER nodejs
 
 # Expose the HTTP port
 EXPOSE 3000
-
-# Install wget for healthcheck
-USER root
-RUN apk add --no-cache wget
-USER nodejs
 
 # Add healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

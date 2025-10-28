@@ -42,7 +42,7 @@ const genAI = new GoogleGenerativeAI(apiKey, {
 // Use the thinking model
 // @ts-ignore - Ignore TypeScript errors for the beta model
 const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash"
+    model: "gemini-2.5-flash"
 });
 // Configuration with appropriate settings for the thinking model
 // @ts-ignore - Ignore TypeScript errors for beta features
