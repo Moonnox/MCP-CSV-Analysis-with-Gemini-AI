@@ -38,7 +38,14 @@ RUN apk add --no-cache \
     python3-dev \
     libffi-dev \
     openssl-dev \
-    wget
+    wget \
+    chromium \
+    chromium-chromedriver \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont
 
 # Copy package files
 COPY package*.json ./
@@ -58,6 +65,10 @@ RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
 
 # Set production environment
 ENV NODE_ENV=production
+
+# Set Chromium path for Kaleido
+ENV CHROME_BIN=/usr/bin/chromium-browser
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
 
 # Create output directory
 RUN mkdir -p /app/output && chmod 755 /app/output

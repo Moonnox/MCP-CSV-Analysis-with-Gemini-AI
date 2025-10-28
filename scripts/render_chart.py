@@ -129,8 +129,8 @@ def render_chart(config_path, output_path):
         # Convert to Plotly
         fig = chartjs_to_plotly(config)
         
-        # Export as PNG
-        fig.write_image(output_path, format='png', engine='kaleido')
+        # Export as PNG (engine parameter removed as kaleido is now default)
+        fig.write_image(output_path, format='png')
         
         print(f"Successfully rendered chart to: {output_path}")
         return True
