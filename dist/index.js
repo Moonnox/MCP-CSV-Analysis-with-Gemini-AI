@@ -12,12 +12,27 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
+import { createClient } from '@supabase/supabase-js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFileAsync = promisify(execFile);
 // Load environment variables
 dotenv.config();
 // Gemini API setup
 const apiKey = process.env.GEMINI_API_KEY;
 if (!apiKey) {
     throw new Error('GEMINI_API_KEY environment variable is not set');
+}
+// Supabase setup
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+let supabaseClient = null;
+if (supabaseUrl && supabaseKey) {
+    supabaseClient = createClient(supabaseUrl, supabaseKey);
+    console.error('Supabase client initialized');
+}
+else {
+    console.error('Warning: SUPABASE_URL or SUPABASE_KEY not set. Image upload feature will be disabled.');
 }
 // Initialize the Google Generative AI client with the beta endpoint
 // @ts-ignore - Ignore TypeScript errors for the custom initialization
@@ -220,6 +235,61 @@ Please provide:
 `;
     return analysisType === 'basic' ? [basicPrompt] : [basicPrompt, detailedPrompt];
 }
+// Function to render chart JSON as image using Python/Plotly
+async function renderChartImage(configPath, outputPath) {
+    const scriptPath = path.join(process.cwd(), 'scripts', 'render_chart.py');
+    // Check if Python script exists
+    if (!fs.existsSync(scriptPath)) {
+        throw new Error(`Python render script not found at: ${scriptPath}`);
+    }
+    try {
+        const { stdout, stderr } = await execFileAsync('python3', [scriptPath, configPath, outputPath]);
+        if (stderr && !stderr.includes('Successfully')) {
+            console.error(`Python script stderr: ${stderr}`);
+        }
+        if (stdout) {
+            console.error(`Python script stdout: ${stdout}`);
+        }
+    }
+    catch (error) {
+        throw new Error(`Failed to render chart image: ${error.message}`);
+    }
+}
+// Function to upload image to Supabase and get signed URL
+async function uploadToSupabase(filePath, filename) {
+    if (!supabaseClient) {
+        console.error('Supabase client not initialized. Skipping upload.');
+        return null;
+    }
+    try {
+        const fileBuffer = fs.readFileSync(filePath);
+        const bucketName = 'exports';
+        // Upload to Supabase storage
+        const { data, error } = await supabaseClient.storage
+            .from(bucketName)
+            .upload(filename, fileBuffer, {
+            contentType: 'image/png',
+            upsert: true
+        });
+        if (error) {
+            console.error(`Error uploading to Supabase: ${error.message}`);
+            return null;
+        }
+        // Generate signed URL (valid for 1 year)
+        const { data: signedUrlData, error: urlError } = await supabaseClient.storage
+            .from(bucketName)
+            .createSignedUrl(filename, 31536000); // 1 year in seconds
+        if (urlError) {
+            console.error(`Error generating signed URL: ${urlError.message}`);
+            return null;
+        }
+        return signedUrlData.signedUrl;
+    }
+    catch (error) {
+        console.error(`Error in uploadToSupabase: ${error.message}`);
+        return null;
+    }
+}
 // Function to create visualizations using Chart.js
 async function createVisualization(data, columns, type, title, outputDir) {
     const filePaths = [];
@@ -261,6 +331,71 @@ async function createVisualization(data, columns, type, title, outputDir) {
     fs.writeFileSync(configPath, JSON.stringify(chartConfig, null, 2));
     filePaths.push(configPath);
     return filePaths;
+}
+// Enhanced function with image rendering and Supabase upload
+async function createVisualizationWithImage(data, columns, type, title, outputDir) {
+    const timestamp = Date.now();
+    // Convert string data to numbers where possible
+    const numericData = data.map(row => {
+        const newRow = {};
+        Object.entries(row).forEach(([key, value]) => {
+            newRow[key] = isNaN(Number(value)) ? value : Number(value);
+        });
+        return newRow;
+    });
+    // Create chart configuration
+    const chartConfig = {
+        type: type,
+        data: {
+            labels: data.map(row => row[columns[0]]),
+            datasets: [{
+                    label: columns[1],
+                    data: data.map(row => Number(row[columns[1]])),
+                    backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                    borderColor: 'rgba(54, 162, 235, 1)',
+                    borderWidth: 1
+                }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                title: {
+                    display: true,
+                    text: title || `${columns[1]} by ${columns[0]}`
+                }
+            }
+        }
+    };
+    // Save chart configuration to JSON file
+    const configFilename = `chart_config_${type}_${timestamp}.json`;
+    const configPath = path.join(outputDir, configFilename);
+    fs.writeFileSync(configPath, JSON.stringify(chartConfig, null, 2));
+    // Render chart as image using Python/Plotly
+    const imageFilename = `chart_${type}_${timestamp}.png`;
+    const imagePath = path.join(outputDir, imageFilename);
+    let imageUrl = null;
+    try {
+        console.error(`Rendering chart image: ${imageFilename}`);
+        await renderChartImage(configPath, imagePath);
+        console.error(`Chart image rendered successfully: ${imagePath}`);
+        // Upload to Supabase if available
+        if (fs.existsSync(imagePath)) {
+            console.error(`Uploading image to Supabase...`);
+            imageUrl = await uploadToSupabase(imagePath, imageFilename);
+            if (imageUrl) {
+                console.error(`Image uploaded successfully. URL: ${imageUrl}`);
+            }
+        }
+    }
+    catch (error) {
+        console.error(`Error rendering/uploading image: ${error.message}`);
+        // Continue without image if rendering fails
+    }
+    return {
+        configPath,
+        imagePath: fs.existsSync(imagePath) ? imagePath : null,
+        imageUrl
+    };
 }
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -474,8 +609,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         `Available columns in CSV: [${availableColumns.join(', ')}]. ` +
                         `Please ensure your CSV has at least 2 columns, or specify at least 2 column names using the 'columns' parameter.`);
                 }
-                // Generate visualizations
-                const visualizationFiles = await createVisualization(csvData, columnsToVisualize, visualizationType, title || '', saveDir);
+                // Generate visualizations with image rendering and upload
+                const result = await createVisualizationWithImage(csvData, columnsToVisualize, visualizationType, title || '', saveDir);
                 return {
                     content: [
                         {
@@ -483,10 +618,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                             text: JSON.stringify({
                                 message: "Visualizations generated successfully",
                                 visualizationType,
-                                files: visualizationFiles.map(file => ({
-                                    path: file,
-                                    filename: path.basename(file)
-                                }))
+                                chartConfig: {
+                                    path: result.configPath,
+                                    filename: path.basename(result.configPath)
+                                },
+                                renderedImage: result.imagePath ? {
+                                    path: result.imagePath,
+                                    filename: path.basename(result.imagePath),
+                                    url: result.imageUrl
+                                } : null
                             }, null, 2)
                         }
                     ]
