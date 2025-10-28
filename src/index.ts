@@ -19,6 +19,11 @@ import { Chart as ChartJS, ChartConfiguration } from 'chart.js/auto';
 import * as d3 from 'd3';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
+import { createClient } from '@supabase/supabase-js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 // Load environment variables
 dotenv.config();
@@ -27,6 +32,18 @@ dotenv.config();
 const apiKey = process.env.GEMINI_API_KEY;
 if (!apiKey) {
   throw new Error('GEMINI_API_KEY environment variable is not set');
+}
+
+// Supabase setup
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+let supabaseClient: ReturnType<typeof createClient> | null = null;
+
+if (supabaseUrl && supabaseKey) {
+  supabaseClient = createClient(supabaseUrl, supabaseKey);
+  console.error('Supabase client initialized');
+} else {
+  console.error('Warning: SUPABASE_URL or SUPABASE_KEY not set. Image upload feature will be disabled.');
 }
 
 // Initialize the Google Generative AI client with the beta endpoint
@@ -128,6 +145,18 @@ async function readCSVFile(filePath: string): Promise<Record<string, string>[]> 
         throw new Error(`Failed to fetch CSV from URL: ${filePath} - Response body is null`);
       }
       
+      // Check Content-Type header to ensure we're getting CSV data
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('text/html') || contentType.includes('application/xhtml')) {
+        throw new Error(
+          `Failed to fetch CSV from URL: ${filePath} - ` +
+          `Server returned HTML instead of CSV (Content-Type: ${contentType}). ` +
+          `This usually means the URL points to a web page, not a raw CSV file. ` +
+          `If using Google Sheets, use the export URL format: https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv. ` +
+          `For GitHub, use the 'Raw' button URL. For other services, ensure you're using the direct download/export link.`
+        );
+      }
+      
       // Convert Web ReadableStream to Node.js Readable stream
       const sourceStream = Readable.fromWeb(response.body as any);
       
@@ -140,6 +169,33 @@ async function readCSVFile(filePath: string): Promise<Record<string, string>[]> 
       parser.on('data', (data: Record<string, string>) => results.push(data));
       
       await pipeline(sourceStream, parser);
+      
+      // Additional validation: Check if we received HTML content by examining the parsed data
+      if (results.length > 0) {
+        const firstRow = results[0];
+        const columns = Object.keys(firstRow);
+        // Check if any column name contains HTML tags
+        const hasHTMLTags = columns.some(col => 
+          col.includes('<!DOCTYPE') || 
+          col.includes('<html') || 
+          col.includes('<HTML') ||
+          col.includes('<head') ||
+          col.includes('<body')
+        );
+        
+        if (hasHTMLTags) {
+          throw new Error(
+            `Failed to parse CSV from URL: ${filePath} - ` +
+            `Received HTML content instead of CSV data. ` +
+            `The URL appears to point to a web page, not a raw CSV file. ` +
+            `Please ensure you're using a direct CSV download/export link. ` +
+            `Examples: ` +
+            `- Google Sheets: https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv ` +
+            `- GitHub: Click 'Raw' button to get the raw file URL ` +
+            `- Dropbox: Use dl=1 instead of dl=0 in the URL`
+          );
+        }
+      }
       
       return results;
       
@@ -229,6 +285,70 @@ Please provide:
   return analysisType === 'basic' ? [basicPrompt] : [basicPrompt, detailedPrompt];
 }
 
+// Function to render chart JSON as image using Python/Plotly
+async function renderChartImage(configPath: string, outputPath: string): Promise<void> {
+  const scriptPath = path.join(process.cwd(), 'scripts', 'render_chart.py');
+  
+  // Check if Python script exists
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`Python render script not found at: ${scriptPath}`);
+  }
+  
+  try {
+    const { stdout, stderr } = await execFileAsync('python3', [scriptPath, configPath, outputPath]);
+    
+    if (stderr && !stderr.includes('Successfully')) {
+      console.error(`Python script stderr: ${stderr}`);
+    }
+    if (stdout) {
+      console.error(`Python script stdout: ${stdout}`);
+    }
+  } catch (error: any) {
+    throw new Error(`Failed to render chart image: ${error.message}`);
+  }
+}
+
+// Function to upload image to Supabase and get signed URL
+async function uploadToSupabase(filePath: string, filename: string): Promise<string | null> {
+  if (!supabaseClient) {
+    console.error('Supabase client not initialized. Skipping upload.');
+    return null;
+  }
+
+  try {
+    const fileBuffer = fs.readFileSync(filePath);
+    const bucketName = 'exports';
+    
+    // Upload to Supabase storage
+    const { data, error } = await supabaseClient.storage
+      .from(bucketName)
+      .upload(filename, fileBuffer, {
+        contentType: 'image/png',
+        upsert: true
+      });
+
+    if (error) {
+      console.error(`Error uploading to Supabase: ${error.message}`);
+      return null;
+    }
+
+    // Generate signed URL (valid for 1 year)
+    const { data: signedUrlData, error: urlError } = await supabaseClient.storage
+      .from(bucketName)
+      .createSignedUrl(filename, 31536000); // 1 year in seconds
+
+    if (urlError) {
+      console.error(`Error generating signed URL: ${urlError.message}`);
+      return null;
+    }
+
+    return signedUrlData.signedUrl;
+  } catch (error: any) {
+    console.error(`Error in uploadToSupabase: ${error.message}`);
+    return null;
+  }
+}
+
 // Function to create visualizations using Chart.js
 async function createVisualization(data: Record<string, string>[], columns: string[], type: string, title: string, outputDir: string): Promise<string[]> {
   const filePaths: string[] = [];
@@ -274,6 +394,84 @@ async function createVisualization(data: Record<string, string>[], columns: stri
   filePaths.push(configPath);
 
   return filePaths;
+}
+
+// Enhanced function with image rendering and Supabase upload
+async function createVisualizationWithImage(
+  data: Record<string, string>[], 
+  columns: string[], 
+  type: string, 
+  title: string, 
+  outputDir: string
+): Promise<{ configPath: string; imagePath: string | null; imageUrl: string | null }> {
+  const timestamp = Date.now();
+
+  // Convert string data to numbers where possible
+  const numericData = data.map(row => {
+    const newRow: Record<string, any> = {};
+    Object.entries(row).forEach(([key, value]) => {
+      newRow[key] = isNaN(Number(value)) ? value : Number(value);
+    });
+    return newRow;
+  });
+
+  // Create chart configuration
+  const chartConfig: ChartConfiguration = {
+    type: type as any,
+    data: {
+      labels: data.map(row => row[columns[0]]),
+      datasets: [{
+        label: columns[1],
+        data: data.map(row => Number(row[columns[1]])),
+        backgroundColor: 'rgba(54, 162, 235, 0.5)',
+        borderColor: 'rgba(54, 162, 235, 1)',
+        borderWidth: 1
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        title: {
+          display: true,
+          text: title || `${columns[1]} by ${columns[0]}`
+        }
+      }
+    }
+  };
+
+  // Save chart configuration to JSON file
+  const configFilename = `chart_config_${type}_${timestamp}.json`;
+  const configPath = path.join(outputDir, configFilename);
+  fs.writeFileSync(configPath, JSON.stringify(chartConfig, null, 2));
+
+  // Render chart as image using Python/Plotly
+  const imageFilename = `chart_${type}_${timestamp}.png`;
+  const imagePath = path.join(outputDir, imageFilename);
+  let imageUrl: string | null = null;
+
+  try {
+    console.error(`Rendering chart image: ${imageFilename}`);
+    await renderChartImage(configPath, imagePath);
+    console.error(`Chart image rendered successfully: ${imagePath}`);
+
+    // Upload to Supabase if available
+    if (fs.existsSync(imagePath)) {
+      console.error(`Uploading image to Supabase...`);
+      imageUrl = await uploadToSupabase(imagePath, imageFilename);
+      if (imageUrl) {
+        console.error(`Image uploaded successfully. URL: ${imageUrl}`);
+      }
+    }
+  } catch (error: any) {
+    console.error(`Error rendering/uploading image: ${error.message}`);
+    // Continue without image if rendering fails
+  }
+
+  return {
+    configPath,
+    imagePath: fs.existsSync(imagePath) ? imagePath : null,
+    imageUrl
+  };
 }
 
 // List available tools
@@ -519,8 +717,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           );
         }
 
-        // Generate visualizations
-        const visualizationFiles = await createVisualization(
+        // Generate visualizations with image rendering and upload
+        const result = await createVisualizationWithImage(
           csvData,
           columnsToVisualize,
           visualizationType,
@@ -535,10 +733,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: JSON.stringify({
                 message: "Visualizations generated successfully",
                 visualizationType,
-                files: visualizationFiles.map(file => ({
-                  path: file,
-                  filename: path.basename(file)
-                }))
+                chartConfig: {
+                  path: result.configPath,
+                  filename: path.basename(result.configPath)
+                },
+                renderedImage: result.imagePath ? {
+                  path: result.imagePath,
+                  filename: path.basename(result.imagePath),
+                  url: result.imageUrl
+                } : null
               }, null, 2)
             }
           ]

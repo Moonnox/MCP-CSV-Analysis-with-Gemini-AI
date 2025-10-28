@@ -51,10 +51,11 @@ A powerful Model Context Protocol (MCP) server that provides advanced CSV analys
 
 ### Prerequisites
 - Node.js (v16 or higher)
+- Python 3.x (for chart rendering)
 - TypeScript
 - Claude Desktop
 - Google Gemini API Key
-- Plotly Account (for visualizations)
+- Supabase Account (for image storage and hosting)
 
 ### Installation
 
@@ -65,12 +66,26 @@ cd mcp-csv-analysis-gemini
 npm install
 ```
 
-2. Create `.env` file:
-```env
-GEMINI_API_KEY=your_api_key_here
+2. Install Python dependencies:
+```bash
+pip install -r requirements.txt
 ```
 
-3. Build the project:
+3. Create `.env` file:
+```env
+GEMINI_API_KEY=your_api_key_here
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_KEY=your_supabase_anon_key
+```
+
+**Setting up Supabase:**
+- Create a free account at [supabase.com](https://supabase.com)
+- Create a new project
+- Go to Settings → API to find your URL and anon key
+- Create a storage bucket named `exports` (Settings → Storage → New Bucket)
+- Make the bucket public for signed URLs to work
+
+4. Build the project:
 ```bash
 npm run build
 ```
@@ -226,6 +241,32 @@ output/
 - For frequently analyzed files, consider caching locally
 - Monitor network usage when processing large remote datasets
 - Test with smaller files first to verify URL accessibility
+
+### Common URL Format Issues
+
+**⚠️ Important: You must use direct CSV download URLs, not web page URLs**
+
+The server expects a URL that returns **raw CSV data**, not an HTML page. If you get an error like "Server returned HTML instead of CSV", you need to use the correct URL format:
+
+#### Google Sheets
+- ❌ **Wrong**: `https://docs.google.com/spreadsheets/d/SHEET_ID/edit`
+- ✅ **Correct**: `https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv`
+- 📝 For specific sheets: Add `&gid=SHEET_GID` to the URL
+
+#### GitHub
+- ❌ **Wrong**: `https://github.com/user/repo/blob/main/data.csv`
+- ✅ **Correct**: `https://raw.githubusercontent.com/user/repo/main/data.csv`
+- 📝 Click the "Raw" button on GitHub to get the correct URL
+
+#### Dropbox
+- ❌ **Wrong**: `https://www.dropbox.com/s/FILE_ID/data.csv?dl=0`
+- ✅ **Correct**: `https://www.dropbox.com/s/FILE_ID/data.csv?dl=1`
+- 📝 Change `dl=0` to `dl=1` for direct download
+
+#### Other Services
+- Ensure you're using the **"Download"** or **"Export"** link, not the **"View"** or **"Share"** link
+- The URL should directly return CSV content, not redirect to a login or preview page
+- Test the URL in a browser or `curl` - it should download the CSV file, not show a web page
 
 ### Limitations
 - **File Size**: Remote files are loaded into memory; extremely large files (>1GB) may cause memory issues

@@ -100,6 +100,15 @@ async function readCSVFile(filePath) {
             if (!response.body) {
                 throw new Error(`Failed to fetch CSV from URL: ${filePath} - Response body is null`);
             }
+            // Check Content-Type header to ensure we're getting CSV data
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.includes('text/html') || contentType.includes('application/xhtml')) {
+                throw new Error(`Failed to fetch CSV from URL: ${filePath} - ` +
+                    `Server returned HTML instead of CSV (Content-Type: ${contentType}). ` +
+                    `This usually means the URL points to a web page, not a raw CSV file. ` +
+                    `If using Google Sheets, use the export URL format: https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv. ` +
+                    `For GitHub, use the 'Raw' button URL. For other services, ensure you're using the direct download/export link.`);
+            }
             // Convert Web ReadableStream to Node.js Readable stream
             const sourceStream = Readable.fromWeb(response.body);
             // Create CSV parser
@@ -109,6 +118,27 @@ async function readCSVFile(filePath) {
             // Comment 4: pipeline() handles cleanup/abort on errors automatically
             parser.on('data', (data) => results.push(data));
             await pipeline(sourceStream, parser);
+            // Additional validation: Check if we received HTML content by examining the parsed data
+            if (results.length > 0) {
+                const firstRow = results[0];
+                const columns = Object.keys(firstRow);
+                // Check if any column name contains HTML tags
+                const hasHTMLTags = columns.some(col => col.includes('<!DOCTYPE') ||
+                    col.includes('<html') ||
+                    col.includes('<HTML') ||
+                    col.includes('<head') ||
+                    col.includes('<body'));
+                if (hasHTMLTags) {
+                    throw new Error(`Failed to parse CSV from URL: ${filePath} - ` +
+                        `Received HTML content instead of CSV data. ` +
+                        `The URL appears to point to a web page, not a raw CSV file. ` +
+                        `Please ensure you're using a direct CSV download/export link. ` +
+                        `Examples: ` +
+                        `- Google Sheets: https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv ` +
+                        `- GitHub: Click 'Raw' button to get the raw file URL ` +
+                        `- Dropbox: Use dl=1 instead of dl=0 in the URL`);
+                }
+            }
             return results;
         }
         catch (fetchError) {
