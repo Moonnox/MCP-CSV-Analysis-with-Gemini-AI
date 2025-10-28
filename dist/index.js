@@ -371,7 +371,8 @@ async function createVisualizationWithImage(data, columns, type, title, outputDi
     const configPath = path.join(outputDir, configFilename);
     fs.writeFileSync(configPath, JSON.stringify(chartConfig, null, 2));
     // Render chart as image using Python/Plotly
-    const imageFilename = `chart_${type}_${timestamp}.png`;
+    const imageUuid = randomUUID();
+    const imageFilename = `chart_${type}_${timestamp}_${imageUuid}.png`;
     const imagePath = path.join(outputDir, imageFilename);
     let imageUrl = null;
     try {
@@ -390,6 +391,13 @@ async function createVisualizationWithImage(data, columns, type, title, outputDi
     catch (error) {
         console.error(`Error rendering/uploading image: ${error.message}`);
         // Continue without image if rendering fails
+    }
+    finally {
+        // Clean up local file in all scenarios
+        if (fs.existsSync(imagePath)) {
+            fs.unlinkSync(imagePath);
+            console.error(`Local image file deleted: ${imagePath}`);
+        }
     }
     return {
         configPath,
