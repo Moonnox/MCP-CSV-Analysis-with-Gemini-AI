@@ -21,25 +21,20 @@ A powerful Model Context Protocol (MCP) server that provides advanced CSV analys
   - Visualization suggestions
 
 ### 2. Data Visualization Tool (`visualize-data`)
-- **Interactive Visualizations**: Creates beautiful and informative charts using Plotly
+- **Interactive Visualizations**: Creates beautiful and informative charts using Plotly Python
 - **Flexible File Sources**: Visualize CSV data from local file system or remote URLs (HTTP/HTTPS)
-- **Visualization Types**:
-  - `basic`: Automatic visualization selection based on data types
-  - `advanced`: Complex multi-variable visualizations
-  - `custom`: User-defined chart configurations
 - **Chart Types**:
-  - Histograms for distribution analysis
-  - Correlation heatmaps
-  - Scatter plots
-  - Line charts
   - Bar charts
-  - Box plots
+  - Line charts
+  - Scatter plots
+  - Pie charts
 - **Features**:
-  - Automatic data type detection
-  - Smart chart selection
-  - Interactive plots
-  - High-resolution exports
-  - Customizable layouts
+  - Automatic chart rendering from JSON configuration
+  - High-resolution PNG exports
+  - Automatic upload to Supabase storage
+  - Signed URLs for easy sharing (1-year validity)
+  - Returns both raw JSON config and rendered image URL
+  - Customizable titles and labels
 
 ### 3. Thinking Generation Tool (`generate-thinking`)
 - Generates detailed thinking process text using Gemini's experimental model
@@ -102,8 +97,8 @@ npm run build
       "cwd": "path/to/mcp-csv-analysis-gemini",
       "env": {
         "GEMINI_API_KEY": "your_api_key_here",
-        "PLOTLY_USERNAME": "your_plotly_username",
-        "PLOTLY_API_KEY": "your_plotly_api_key"
+        "SUPABASE_URL": "your_supabase_project_url",
+        "SUPABASE_KEY": "your_supabase_anon_key"
       }
     }
   }
@@ -146,13 +141,17 @@ The `csvPath` parameter accepts both local file paths and HTTP/HTTPS URLs. When 
   "name": "visualize-data",
   "arguments": {
     "csvPath": "./data/your_file.csv",
-    "visualizationType": "basic",
+    "visualizationType": "bar",
     "columns": ["column1", "column2"],
-    "chartTypes": ["histogram", "scatter"],
+    "title": "My Chart Title",
     "outputDir": "./custom_output"
   }
 }
 ```
+
+The tool will return:
+- **chartConfig**: Path to the JSON configuration file
+- **renderedImage**: Local path and Supabase signed URL to the rendered PNG image
 
 #### Using Remote CSV Files
 ```json
@@ -160,9 +159,9 @@ The `csvPath` parameter accepts both local file paths and HTTP/HTTPS URLs. When 
   "name": "visualize-data",
   "arguments": {
     "csvPath": "https://example.com/data/metrics.csv",
-    "visualizationType": "basic",
+    "visualizationType": "line",
     "columns": ["date", "revenue"],
-    "chartTypes": ["line", "bar"],
+    "title": "Revenue Over Time",
     "outputDir": "./custom_output"
   }
 }
@@ -187,33 +186,41 @@ output/
 │   ├── csv_analysis_[timestamp]_part2.txt
 │   └── csv_analysis_[timestamp]_summary.txt
 ├── visualizations/
-│   ├── histogram_[column]_[timestamp].png
-│   ├── scatter_[columns]_[timestamp].png
-│   └── correlation_heatmap_[timestamp].png
+│   ├── chart_config_bar_[timestamp].json
+│   ├── chart_bar_[timestamp].png
+│   ├── chart_config_line_[timestamp].json
+│   └── chart_line_[timestamp].png
 └── thinking/
     └── gemini_thinking_[timestamp].txt
 ```
 
+**Note**: Chart images are automatically uploaded to your Supabase `exports` bucket and accessible via signed URLs.
+
 ## 📊 Visualization Types
 
-### Basic Visualizations
-- Automatically generated based on data types
-- Includes:
-  - Histograms for numeric columns
-  - Correlation heatmaps
-  - Basic scatter plots
+The `visualize-data` tool supports the following chart types:
 
-### Advanced Visualizations
-- More sophisticated charts
-- Multiple variables
-- Enhanced layouts
-- Custom color schemes
+### Bar Charts (`visualizationType: "bar"`)
+- Best for comparing categories or discrete values
+- Shows vertical bars for each data point
 
-### Custom Visualizations
-- User-defined chart types
-- Configurable parameters
-- Custom styling options
-- Advanced plot layouts
+### Line Charts (`visualizationType: "line"`)
+- Ideal for time-series data and trends
+- Displays connected data points
+
+### Scatter Plots (`visualizationType: "scatter"`)
+- Shows relationships between two variables
+- Each data point as a marker
+
+### Pie Charts (`visualizationType: "pie"`)
+- Represents parts of a whole
+- Shows proportional data
+
+### Output Format
+Each visualization generates:
+1. **JSON Configuration**: Chart.js compatible config file
+2. **PNG Image**: High-resolution rendered chart (1200x800px)
+3. **Signed URL**: Public URL to access the image (valid for 1 year)
 
 ## 🌐 Remote File Support
 
@@ -283,9 +290,11 @@ The server expects a URL that returns **raw CSV data**, not an HTML page. If you
 - `npm run dev`: Run in development mode with ts-node
 
 ### Environment Variables
-- `GEMINI_API_KEY`: Your Google Gemini API key
-- `PLOTLY_USERNAME`: Your Plotly username
-- `PLOTLY_API_KEY`: Your Plotly API key
+- `GEMINI_API_KEY`: Your Google Gemini API key (required)
+- `SUPABASE_URL`: Your Supabase project URL (optional, required for image uploads)
+- `SUPABASE_KEY`: Your Supabase anon/service key (optional, required for image uploads)
+
+**Note**: If Supabase credentials are not provided, the tool will still generate chart JSON configs and local PNG files, but won't upload to cloud storage.
 
 ## 📝 Analysis Details
 
@@ -348,7 +357,17 @@ The server expects a URL that returns **raw CSV data**, not an HTML page. If you
    - Verify firewall/proxy settings allow outbound connections
    - Check for HTTP error responses (404, 403, 500, etc.)
 
-4. **Claude Desktop Connection**
+4. **Python/Visualization Error**
+   - Ensure Python 3.x is installed and in PATH
+   - Install required packages: `pip install -r requirements.txt`
+   - Check Python script exists in `scripts/render_chart.py`
+
+5. **Supabase Upload Error**
+   - Verify Supabase credentials in `.env`
+   - Ensure `exports` bucket exists and is configured
+   - Check bucket permissions (should allow public access for signed URLs)
+
+6. **Claude Desktop Connection**
    - Verify config.json syntax
    - Check file paths in config
    - Restart Claude Desktop
@@ -376,10 +395,23 @@ interface AnalyzeCSVParams {
 interface VisualizeDataParams {
   csvPath: string;          // Local file path or HTTP/HTTPS URL to CSV file
   outputDir?: string;       // Optional output directory
-  visualizationType?: 'basic' | 'advanced' | 'custom';  // Visualization type
-  columns?: string[];       // Columns to visualize
-  chartTypes?: ('scatter' | 'line' | 'bar' | 'histogram' | 'box' | 'heatmap')[];  // Chart types
-  customConfig?: Record<string, any>;  // Custom configuration
+  visualizationType?: 'bar' | 'line' | 'scatter' | 'pie';  // Chart type (default: 'bar')
+  columns?: string[];       // Array of 2+ column names [x-axis, y-axis]
+  title?: string;          // Chart title (optional)
+}
+
+interface VisualizeDataResult {
+  message: string;
+  visualizationType: string;
+  chartConfig: {
+    path: string;          // Local path to JSON config
+    filename: string;      // Config filename
+  };
+  renderedImage: {
+    path: string;          // Local path to PNG image
+    filename: string;      // Image filename
+    url: string | null;    // Supabase signed URL (null if upload disabled)
+  } | null;                // null if rendering failed
 }
 ```
 
