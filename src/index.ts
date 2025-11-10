@@ -790,67 +790,103 @@ async function main() {
 
     // MCP POST endpoint
     app.post('/mcp', async (req: express.Request, res: express.Response) => {
-      const sessionId = req.get('mcp-session-id');
-      let transport = sessionId ? transports.get(sessionId) : undefined;
+      try {
+        const sessionId = req.get('mcp-session-id');
+        let transport = sessionId ? transports.get(sessionId) : undefined;
 
-      if (!transport) {
-        // Check if this is an initialize request
-        if (isInitializeRequest(req.body)) {
-          // Declare local variable to hold the initialized session ID
-          let localSessionId: string | undefined;
-          
-          // Create new transport with session management
-          transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: () => randomUUID(),
-            onsessioninitialized: (sessionId: string) => {
-              localSessionId = sessionId;
-              transports.set(sessionId, transport!);
-            }
-          });
-          
-          // Set up cleanup on transport close using captured session ID
-          transport.onclose = () => {
-            if (localSessionId) {
-              transports.delete(localSessionId);
-            }
-          };
-          
-          // Connect server to the new transport
-          await server.connect(transport);
-        } else {
-          // Invalid or missing session
-          return res.status(404).json({
+        if (!transport) {
+          // Check if this is an initialize request
+          if (isInitializeRequest(req.body)) {
+            // Declare local variable to hold the initialized session ID
+            let localSessionId: string | undefined;
+            
+            // Create new transport with session management
+            transport = new StreamableHTTPServerTransport({
+              sessionIdGenerator: () => randomUUID(),
+              onsessioninitialized: (sessionId: string) => {
+                console.error(`Session initialized with ID: ${sessionId}`);
+                localSessionId = sessionId;
+                transports.set(sessionId, transport!);
+              }
+            });
+            
+            // Set up cleanup on transport close using captured session ID
+            transport.onclose = () => {
+              console.error(`Closing session: ${localSessionId}`);
+              if (localSessionId) {
+                transports.delete(localSessionId);
+              }
+            };
+            
+            // Connect server to the new transport
+            console.error('Connecting server to new transport...');
+            await server.connect(transport);
+            console.error('Server connected successfully');
+          } else {
+            // Invalid or missing session
+            console.error('Received request without valid session ID and not an initialize request');
+            return res.status(404).json({
+              jsonrpc: '2.0',
+              error: {
+                code: -32000,
+                message: 'Invalid or missing Mcp-Session-Id'
+              },
+              id: null
+            });
+          }
+        }
+
+        // Handle the MCP request
+        console.error(`Handling request for session: ${sessionId || 'new'}`);
+        await transport.handleRequest(req, res, req.body);
+      } catch (error) {
+        console.error('Error in MCP POST handler:', error);
+        if (!res.headersSent) {
+          res.status(500).json({
             jsonrpc: '2.0',
             error: {
-              code: -32000,
-              message: 'Invalid or missing Mcp-Session-Id'
+              code: -32603,
+              message: `Internal error: ${error instanceof Error ? error.message : String(error)}`
             },
             id: null
           });
         }
       }
-
-      // Handle the MCP request
-      await transport.handleRequest(req, res, req.body);
     });
 
     // Shared handler for GET and DELETE requests
     const handleSession = async (req: express.Request, res: express.Response) => {
-      const sessionId = req.get('mcp-session-id');
-      const transport = sessionId ? transports.get(sessionId) : undefined;
+      try {
+        const sessionId = req.get('mcp-session-id');
+        console.error(`${req.method} request for session: ${sessionId}`);
+        const transport = sessionId ? transports.get(sessionId) : undefined;
 
-      if (!transport) {
-        return res.status(404).json({
-          jsonrpc: '2.0',
-          error: {
-            code: -32000,
-            message: 'Unknown Mcp-Session-Id'
-          },
-          id: null
-        });
+        if (!transport) {
+          console.error(`Session not found: ${sessionId}`);
+          return res.status(404).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message: 'Unknown Mcp-Session-Id'
+            },
+            id: null
+          });
+        }
+
+        await transport.handleRequest(req, res);
+      } catch (error) {
+        console.error(`Error in ${req.method} handler:`, error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: `Internal error: ${error instanceof Error ? error.message : String(error)}`
+            },
+            id: null
+          });
+        }
       }
-
-      await transport.handleRequest(req, res);
     };
 
     // MCP GET endpoint (for SSE streaming)
