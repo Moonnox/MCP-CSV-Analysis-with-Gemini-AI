@@ -788,9 +788,65 @@ async function main() {
       });
     });
 
+    // Authentication middleware function
+    const requireAuth = (req: express.Request): { authorized: boolean; error?: any } => {
+      const enableAuth = process.env.ENABLE_AUTH === 'true';
+      
+      if (!enableAuth) {
+        return { authorized: true };
+      }
+
+      const secretKey = process.env.MCP_SECRET_KEY;
+      if (!secretKey) {
+        console.error('ENABLE_AUTH is true but MCP_SECRET_KEY is not set');
+        return {
+          authorized: false,
+          error: {
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message: 'Server configuration error: MCP_SECRET_KEY not set'
+            },
+            id: null
+          }
+        };
+      }
+
+      const providedKey = req.get('x-secret-key');
+      if (!providedKey || providedKey !== secretKey) {
+        return {
+          authorized: false,
+          error: {
+            jsonrpc: '2.0',
+            error: {
+              code: -32001,
+              message: 'Unauthorized: Invalid or missing x-secret-key header'
+            },
+            id: null
+          }
+        };
+      }
+
+      return { authorized: true };
+    };
+
+    // Check if request is a tool invocation
+    const isToolInvocation = (body: any): boolean => {
+      return body && body.method === 'tools/call';
+    };
+
     // MCP POST endpoint
     app.post('/mcp', async (req: express.Request, res: express.Response) => {
       try {
+        // Check authentication for tool invocations
+        if (isToolInvocation(req.body)) {
+          const authResult = requireAuth(req);
+          if (!authResult.authorized) {
+            console.error('Authentication failed for tool invocation');
+            return res.status(401).json(authResult.error);
+          }
+        }
+
         const sessionId = req.get('mcp-session-id');
         let transport = sessionId ? transports.get(sessionId) : undefined;
 
